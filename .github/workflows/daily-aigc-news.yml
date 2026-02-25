@@ -1,0 +1,42 @@
+name: daily-aigc-news
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run tests
+        run: pytest -q
+      - name: Validate secrets
+        env:
+          APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN || secrets.APP_TOKEN }}
+          UID: ${{ secrets.WXPUSHER_UID || secrets.UID }}
+        run: |
+          python - << 'PY'
+          import os
+          token = (os.environ.get("APP_TOKEN") or "").strip()
+          uid = (os.environ.get("UID") or "").strip()
+          if not token:
+            raise SystemExit("Missing APP_TOKEN/WXPUSHER_APP_TOKEN secret")
+          if not uid:
+            raise SystemExit("Missing UID/WXPUSHER_UID secret")
+          print("Secrets ok: app_token_len=", len(token), "uid_len=", len(uid))
+          PY
+      - name: Fetch and push
+        env:
+          WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN || secrets.APP_TOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID || secrets.UID }}
+          APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN || secrets.APP_TOKEN }}
+          UID: ${{ secrets.WXPUSHER_UID || secrets.UID }}
+          LOOKBACK_HOURS: "24"
+        run: python scripts/aigc_news_push.py
