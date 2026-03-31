@@ -14,8 +14,8 @@ from scripts.aigc_news_push import (
 
 def test_format_markdown_empty() -> None:
     md = format_markdown([], hours=24)
-    assert "近24小时 AIGC 科技资讯" in md
-    assert "未抓到匹配资讯" in md
+    assert "AIGC 科技前沿速递" in md
+    assert "未抓取到高权重资讯" in md
 
 
 def test_format_markdown_two_articles() -> None:
@@ -36,8 +36,10 @@ def test_format_markdown_two_articles() -> None:
         ),
     ]
     md = format_markdown(articles, hours=24)
-    assert "1. [A](https://example.com/a)" in md
-    assert "2. [B](https://example.com/b)" in md
+    # 因为 A 会被翻译（可能变成 "一个" 或者原样），所以检查 URL 和排版标记
+    assert "[A](https://example.com/a)" in md or "(https://example.com/a)" in md
+    assert "### 🥇" in md
+    assert "### 🥈" in md
 
 
 def test_fetch_dedup_and_filter() -> None:
