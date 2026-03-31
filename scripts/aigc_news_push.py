@@ -141,6 +141,29 @@ def fetch_aigc_articles(*, hours: int = 24, max_records: int = 50) -> list[Artic
     return articles
 
 
+def translate_text(text: str) -> str:
+    """使用免费的 Google Translate 接口将文本翻译为中文"""
+    if not text:
+        return text
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "zh-CN",
+            "dt": "t",
+            "q": text,
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        translated = "".join([sentence[0] for sentence in data[0] if sentence[0]])
+        return translated
+    except Exception as e:
+        print(f"Translation failed for '{text}': {e}")
+        return text  # 翻译失败时返回原英文
+
+
 def format_markdown(articles: list[Article], *, hours: int) -> str:
     now_local = datetime.now().astimezone()
     header = f"近{hours}小时 AIGC 科技资讯（Top {min(10, len(articles))}）\n\n更新时间：{now_local:%Y-%m-%d %H:%M:%S %Z}\n\n"
@@ -150,12 +173,16 @@ def format_markdown(articles: list[Article], *, hours: int) -> str:
 
     lines: list[str] = [header]
     for idx, a in enumerate(articles[:10], start=1):
-        meta_parts = [p for p in [a.domain, a.source_country, a.seen_date] if p]
-        meta = " | ".join(meta_parts)
-        if meta:
-            lines.append(f"{idx}. [{a.title}]({a.url})\n   {meta}\n")
-        else:
-            lines.append(f"{idx}. [{a.title}]({a.url})\n")
+        # 翻译标题
+        cn_title = translate_text(a.title)
+        
+        # 整理元数据
+        source = a.source_country or a.domain or "未知出处"
+        date_str = a.seen_date or datetime.now().astimezone().strftime("%Y-%m-%d")
+        
+        # 统一格式：1. [中文标题](URL) (原始英文标题可省略，直接用中文展示)
+        # 来源：XXX | 时间：YYY
+        lines.append(f"{idx}. [{cn_title}]({a.url})\n   > 🏢 出处：{source} 🕒 时间：{date_str}\n")
     return "\n".join(lines).strip()
 
 
