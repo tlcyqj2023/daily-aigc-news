@@ -166,23 +166,55 @@ def translate_text(text: str) -> str:
 
 def format_markdown(articles: list[Article], *, hours: int) -> str:
     now_local = datetime.now().astimezone()
-    header = f"近{hours}小时 AIGC 科技资讯（Top {min(10, len(articles))}）\n\n更新时间：{now_local:%Y-%m-%d %H:%M:%S %Z}\n\n"
+    
+    # 顶部横幅设计：使用表情、加粗和引用块营造层级感
+    header = (
+        f"## 🤖 AIGC 科技前沿速递\n\n"
+        f"> **聚合过去 {hours} 小时全网最有价值的 AI 资讯**\n"
+        f"> 🗓️ 更新时间：`{now_local:%Y-%m-%d %H:%M}`\n\n"
+        f"---\n\n"
+    )
 
     if not articles:
-        return header + "未抓到匹配资讯（可能是接口临时波动或关键词过窄）。"
+        return header + "📭 **当前时段未抓取到高权重资讯，请稍后再试。**\n\n*（可能原因：接口临时波动或时段内无重大新闻）*"
 
     lines: list[str] = [header]
+    
+    # 定义不同序号的专属图标，提升视觉体验
+    def get_rank_icon(index: int) -> str:
+        if index == 1: return "🥇"
+        if index == 2: return "🥈"
+        if index == 3: return "🥉"
+        return "🔹"
+
     for idx, a in enumerate(articles[:10], start=1):
-        # 翻译标题
         cn_title = translate_text(a.title)
-        
-        # 整理元数据
-        source = a.source_country or a.domain or "未知出处"
+        source = a.source_country or a.domain or "Global Media"
         date_str = a.seen_date or datetime.now().astimezone().strftime("%Y-%m-%d")
         
-        # 统一格式：1. [中文标题](URL) (原始英文标题可省略，直接用中文展示)
-        # 来源：XXX | 时间：YYY
-        lines.append(f"{idx}. [{cn_title}]({a.url})\n   > 🏢 出处：{source} 🕒 时间：{date_str}\n")
+        # 截断过长的域名/来源，保持排版整洁
+        if len(source) > 20:
+            source = source[:17] + "..."
+            
+        icon = get_rank_icon(idx)
+        
+        # 资讯卡片式排版：
+        # 标题行加粗，并附带序号图标和链接
+        # 元数据行使用小字/代码块体呈现，增强专业感
+        article_block = (
+            f"### {icon} [{cn_title}]({a.url})\n"
+            f"🗞️ `来源: {source}` ⏳ `时间: {date_str}`\n"
+        )
+        lines.append(article_block)
+        
+    # 底部页脚
+    footer = (
+        f"\n---\n"
+        f"💡 *此报表由 GitHub Actions 自动化引擎生成*\n"
+        f"🔗 *Powered by GDELT & Hacker News*"
+    )
+    lines.append(footer)
+    
     return "\n".join(lines).strip()
 
 
