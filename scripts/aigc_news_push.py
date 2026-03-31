@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -16,6 +17,77 @@ class Article:
     domain: str | None
     seen_date: str | None
     source_country: str | None
+
+
+def fetch_hacker_news_aigc(*, hours: int = 24) -> list[Article]:
+    # Hacker News Algolia API
+    # 抓取最近 N 小时内的 AI 相关高赞文章
+    import time
+    from urllib.parse import urlparse
+    
+    now_ts = int(time.time())
+    start_ts = now_ts - (hours * 3600)
+    
+    # 搜索标题包含 AI/LLM/GPT/OpenAI 等关键词的 story
+    # 修改 query 为 Hacker News Algolia 支持的格式，不要用 OR 而是用逗号或空格，这里直接用简单关键词
+    query = "AI"
+    url = "https://hn.algolia.com/api/v1/search_by_date"
+    params = {
+        "query": query,
+        "tags": "story",
+        "numericFilters": f"created_at_i>{start_ts}",
+        "hitsPerPage": 30,
+    }
+    
+    resp = requests.get(url, params=params, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    
+    hits = data.get("hits") or []
+    
+    seen_urls: set[str] = set()
+    articles: list[Article] = []
+    
+    for item in hits:
+        item_url = (item.get("url") or "").strip()
+        title = (item.get("title") or "").strip()
+        
+        # HN 有些是内部讨论帖没有外链，用 HN 链接替代
+        if not item_url:
+            item_id = item.get("objectID")
+            if item_id:
+                item_url = f"https://news.ycombinator.com/item?id={item_id}"
+            else:
+                continue
+                
+        if not title:
+            continue
+            
+        if item_url in seen_urls:
+            continue
+        seen_urls.add(item_url)
+        
+        domain = None
+        try:
+            domain = urlparse(item_url).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+        except Exception:
+            pass
+            
+        created_at = item.get("created_at") or ""
+        
+        articles.append(
+            Article(
+                title=title,
+                url=item_url,
+                domain=domain,
+                seen_date=created_at[:10] if created_at else None, # 只取日期部分 YYYY-MM-DD
+                source_country="Hacker News",
+            )
+        )
+        
+    return articles
 
 
 def fetch_aigc_articles(*, hours: int = 24, max_records: int = 50) -> list[Article]:
@@ -105,6 +177,41 @@ def send_to_wechat_via_wxpusher(*, app_token: str, uids: list[str], markdown: st
     return data
 
 
+def fetch_with_retry_and_fallback(*, hours: int = 24, max_records: int = 50) -> tuple[list[Article], list[str]]:
+    # 数据源抓取顺序
+    fetchers = [
+        ("GDELT", lambda: fetch_aigc_articles(hours=hours, max_records=max_records)),
+        ("Hacker News", lambda: fetch_hacker_news_aigc(hours=hours)),
+    ]
+    
+    max_retries = 3
+    retry_delay = 180  # 3 分钟
+    
+    errors: list[str] = []
+    
+    for attempt in range(max_retries):
+        for source_name, fetcher in fetchers:
+            try:
+                print(f"[Attempt {attempt+1}/{max_retries}] Fetching from {source_name}...")
+                articles = fetcher()
+                if articles:
+                    return articles, errors
+                else:
+                    errors.append(f"[Attempt {attempt+1}] {source_name} returned empty list.")
+            except Exception as e:
+                err_msg = f"[Attempt {attempt+1}] {source_name} error: {type(e).__name__}: {e}"
+                print(err_msg)
+                errors.append(err_msg)
+        
+        # 如果当前回合所有数据源都失败/为空，且还没到最后一次重试，则等待 3 分钟
+        if attempt < max_retries - 1:
+            print(f"All sources failed or returned empty. Waiting {retry_delay} seconds before next attempt...")
+            time.sleep(retry_delay)
+            
+    # 连续 3 次全部失败，返回空列表和收集到的所有错误
+    return [], errors
+
+
 def main() -> None:
     app_token = (os.environ.get("WXPUSHER_APP_TOKEN") or os.environ.get("APP_TOKEN") or "").strip()
     uid = (os.environ.get("WXPUSHER_UID") or os.environ.get("UID") or "").strip()
@@ -124,13 +231,25 @@ def main() -> None:
         )
 
     try:
-        articles = fetch_aigc_articles(hours=hours, max_records=50)
-        markdown = format_markdown(articles, hours=hours)
+        articles, errors = fetch_with_retry_and_fallback(hours=hours, max_records=50)
+        
+        if articles:
+            markdown = format_markdown(articles, hours=hours)
+        else:
+            now_local = datetime.now().astimezone()
+            error_details = "\n\n".join(errors[-6:]) # 只展示最后两轮的错误，避免超长
+            markdown = (
+                f"近{hours}小时 AIGC 科技资讯（抓取失败）\n\n"
+                f"更新时间：{now_local:%Y-%m-%d %H:%M:%S %Z}\n\n"
+                f"**已连续 3 次尝试所有备用数据源，均告失败。错误日志如下：**\n\n"
+                f"```text\n{error_details}\n```"
+            )
+            
     except Exception as e:
         now_local = datetime.now().astimezone()
         markdown = (
-            f"近{hours}小时 AIGC 科技资讯（抓取失败）\n\n更新时间：{now_local:%Y-%m-%d %H:%M:%S %Z}\n\n"
-            f"错误：{type(e).__name__}: {e}"
+            f"近{hours}小时 AIGC 科技资讯（系统崩溃）\n\n更新时间：{now_local:%Y-%m-%d %H:%M:%S %Z}\n\n"
+            f"未捕获的系统错误：{type(e).__name__}: {e}"
         )
     print(markdown)
     if dry_run:
